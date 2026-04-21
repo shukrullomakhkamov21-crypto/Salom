@@ -1,4 +1,2 @@
 aiogram
 requests
-googletrans==3.1.0a0
-httpx==0.24.1
