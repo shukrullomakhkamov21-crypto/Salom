@@ -1,96 +1,103 @@
 import asyncio
-import requests
+import logging
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.context import FSMContext
 
-API_TOKEN = '8799283771:AAEThxn1O3emdhtEr5h4LbjmBhNHcrAXS8Y'
+# --- SOZLAMALAR ---
+API_TOKEN = '8750077178:AAFgDf_LDL11-cYvg_KGZUboTnkH-oWPFak'
+ADMIN_ID = 8213426436  # Sizning ID raqamingiz o'rnatildi
+users = set()  # Foydalanuvchilar bazasi
+
+class BotStates(StatesGroup):
+    waiting_for_broadcast = State()  # Rassilka xabarini kutish
+    waiting_for_receipt = State()    # Chek rasmiga kutish
+
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
-user_data = {}
 
-# Қитъалар
-CONTINENTS = {"🌍 Africa": "Africa", "🌎 Americas": "Americas", "🌏 Asia": "Asia", "🇪🇺 Europe": "Europe", "🏝 Oceania": "Oceania"}
-
+# --- START KOMANDASI ---
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    kb = ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="🇺🇿 O'zbek"), KeyboardButton(text="🇷🇺 Русский")],
-        [KeyboardButton(text="🇬🇧 English"), KeyboardButton(text="🇹🇯 Тоҷикӣ")]
-    ], resize_keyboard=True)
-    await message.answer("Assalomu alaykum! Tilni tanlang / Выберите язык:", reply_markup=kb)
+    users.add(message.from_user.id)
+    kb = [
+        [types.KeyboardButton(text="🍅 Pomidor Taymer sotib olish (50 somoni)")],
+        [types.KeyboardButton(text="ℹ️ Yordam")]
+    ]
+    keyboard = types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+    await message.answer("Xush kelibsiz! Bee School botiga xush kelibsiz. 🐝\n\nBu yerda siz foydali o'quv qurollarini sotib olishingiz mumkin.", reply_markup=keyboard)
 
-@dp.message(F.text.in_(["🇺🇿 O'zbek", "🇷🇺 Русский", "🇬🇧 English", "🇹🇯 Тоҷикӣ"]))
-async def main_menu(message: types.Message):
-    user_data[message.from_user.id] = {"lang": message.text}
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=k, callback_data=f"cont_{v}")] for k, v in CONTINENTS.items()
+# --- RASSILKA (FAQAT SIZ UCHUN) ---
+@dp.message(Command("rassilka"), F.from_user.id == ADMIN_ID)
+async def start_broadcast(message: types.Message, state: FSMContext):
+    await message.answer("Hamma foydalanuvchilarga yubormoqchi bo'lgan xabaringizni yuboring (matn, rasm yoki fayl):")
+    await state.set_state(BotStates.waiting_for_broadcast)
+
+@dp.message(BotStates.waiting_for_broadcast, F.from_user.id == ADMIN_ID)
+async def do_broadcast(message: types.Message, state: FSMContext):
+    count = 0
+    for user_id in users:
+        try:
+            await message.copy_to(chat_id=user_id)
+            count += 1
+        except:
+            pass
+    await message.answer(f"Xabar {count} ta foydalanuvchiga yuborildi. ✅")
+    await state.clear()
+
+# --- TO'LOV JARAYONI ---
+@dp.message(F.text == "🍅 Pomidor Taymer sotib olish (50 somoni)")
+async def buy_timer(message: types.Message, state: FSMContext):
+    payment_info = (
+        "To'lovni amalga oshirish uchun:\n\n"
+        "💳 Karta: 4444 4444 4444 4444 (Eskhata Visa)\n"
+        "💰 Summa: 50 somoni\n\n"
+        "To'lovdan so'ng, chekni (skrinshotni) shu yerga rasm ko'rinishida yuboring!"
+    )
+    await message.answer(payment_info)
+    await state.set_state(BotStates.waiting_for_receipt)
+
+# --- CHEKNI QABUL QILISH VA SIZGA YUBORISH ---
+@dp.message(BotStates.waiting_for_receipt, F.photo)
+async def handle_receipt(message: types.Message, state: FSMContext):
+    await message.answer("Rahmat! Chek adminga yuborildi. Tasdiqlangach, mahsulot yuboriladi.")
+    
+    # Sizga (Adminga) tasdiqlash tugmasi bilan boradi
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="✅ Tasdiqlash (Fayl yuborish)", callback_data=f"accept_{message.from_user.id}")]
     ])
-    text = {
-        "🇺🇿 O'zbek": "Qit'ani tanlang yoki davlat nomini inglizcha yozing:",
-        "🇷🇺 Русский": "Выберите континент или напишите название страны на английском:",
-        "🇬🇧 English": "Choose a continent or write the country name in English:",
-        "🇹🇯 Тоҷикӣ": "Қитъаро интихоб кунед ё номи кишварро бо англисӣ нависед:"
-    }
-    await message.answer(text[message.text], reply_markup=kb)
-
-@dp.message(F.text)
-async def manual_search(message: types.Message):
-    """Исм орқали қидириш (AI-сиз)"""
-    name = message.text.strip()
-    res = requests.get(f"https://restcountries.com/v3.1/name/{name}")
-    if res.status_code == 200:
-        await send_details(message, res.json()[0])
-    else:
-        await message.answer("❌ Топилмади. Номни инглизча ёзиб кўринг (масалан: Uzbekistan).")
-
-@dp.callback_query(F.data.startswith("cont_"))
-async def list_countries(call: types.CallbackQuery):
-    continent = call.data.split("_")[1]
-    res = requests.get(f"https://restcountries.com/v3.1/region/{continent}").json()
-    countries = sorted([c['name']['common'] for c in res])
     
-    # Биринчи 15 та давлатни чиқарамиз (Pagination учун намуна)
-    btns = [[InlineKeyboardButton(text=c, callback_data=f"info_{c}")] for c in countries[:15]]
-    btns.append([InlineKeyboardButton(text="🏠 Menu", callback_data="back")])
-    await call.message.edit_text(f"{continent} davlatlari:", reply_markup=InlineKeyboardMarkup(inline_keyboard=btns))
+    await bot.send_photo(
+        chat_id=ADMIN_ID,
+        photo=message.photo[-1].file_id,
+        caption=f"🔔 Yangi to'lov!\nFoydalanuvchi: @{message.from_user.username}\nID: {message.from_user.id}",
+        reply_markup=kb
+    )
+    await state.clear()
 
-@dp.callback_query(F.data.startswith("info_"))
-async def country_info(call: types.CallbackQuery):
-    name = call.data.split("_")[1]
-    res = requests.get(f"https://restcountries.com/v3.1/name/{name}?fullText=true").json()[0]
-    await send_details(call.message, res)
-    await call.answer()
-
-async def send_details(target, data):
-    lang = user_data.get(target.chat.id, {}).get("lang", "🇺🇿 O'zbek")
+# --- SIZ TASDIQLASANGIZ FAYL KETADI ---
+@dp.callback_query(F.data.startswith("accept_"))
+async def approve_payment(callback: types.CallbackQuery):
+    user_id = int(callback.data.split("_")[1])
+    await bot.send_message(user_id, "Sizning to'lovingiz tasdiqlandi! ✅\n\nMana sizning faylingiz:")
     
-    # Маълумотларни йиғиш
-    name = data['name']['common']
-    cap = data.get('capital', ['N/A'])[0]
-    pop = f"{data.get('population', 0):,}"
-    area = f"{data.get('area', 0):,}"
-    maps = data['maps']['googleMaps']
-    flag = data.get('flag', '📍')
+    # Faylni yuborish qismi (o'zingizni faylingiz havolasini qo'ying)
+    await bot.send_document(
+        chat_id=user_id,
+        document="https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
+        caption="Pomodoro o'quv qo'llanmasi. 🍅"
+    )
+    await callback.answer("Foydalanuvchiga fayl yuborildi!")
+    await callback.message.edit_caption(caption=callback.message.caption + "\n\n✅ TASTIQLANDI")
 
-    titles = {
-        "🇺🇿 O'zbek": ["Davlat", "Poytaxt", "Aholi", "Maydon", "Xarita"],
-        "🇷🇺 Русский": ["Страна", "Столица", "Население", "Площадь", "Карта"],
-        "🇬🇧 English": ["Country", "Capital", "Population", "Area", "Map"],
-        "🇹🇯 Тоҷикӣ": ["Кишвар", "Пойтахт", "Аҳолӣ", "Масоҳат", "Харита"]
-    }
-    t = titles.get(lang, titles["🇺🇿 O'zbek"])
-
-    msg = (f"{flag} **{t[0]}: {name}**\n\n"
-           f"🏙 **{t[1]}:** {cap}\n"
-           f"👥 **{t[2]}:** {pop}\n"
-           f"📏 **{t[3]}:** {area} km²\n"
-           f"📍 **{t[4]}:** [Google Maps]({maps})")
-    await target.answer(msg, parse_mode="Markdown")
-
+# --- ISHGA TUSHIRISH ---
 async def main():
-    await bot.delete_webhook(drop_pending_updates=True)
+    logging.basicConfig(level=logging.INFO)
     await dp.start_polling(bot)
 
-if __name__ == '__main__':
-    asyncio.run(main())
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logging.error("Bot to'xtatildi!")
