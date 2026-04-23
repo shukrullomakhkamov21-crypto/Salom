@@ -5,7 +5,7 @@ from aiogram.filters import Command
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 
 # Bot tokeni
-API_TOKEN = 'SIZNING_BOT_TOKENINGIZ'
+API_TOKEN = '8750077178:AAFgDf_LDL11-cYvg_KGZUboTnkH-oWPFak'
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
