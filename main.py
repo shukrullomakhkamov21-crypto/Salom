@@ -10,7 +10,7 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMar
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 # --- SOZLAMALAR ---
-API_TOKEN = '8750077178:AAFgDf_LDL11-cYvg_KGZUboTnkH-oWPFak' # Tokeningizni kiriting
+API_TOKEN = '8750077178:AAFgDf_LDL11-cYvg_KGZUboTnkH-oWPFak' 
 ADMIN_ID = 8213426436 
 
 logging.basicConfig(level=logging.INFO)
@@ -43,7 +43,8 @@ class Broadcast(StatesGroup):
 def get_main_menu(user_id):
     buttons = [[KeyboardButton(text="Testlar 📝"), KeyboardButton(text="Lug'atlar ombori 📚")]]
     if user_id == ADMIN_ID:
-        buttons.append([KeyboardButton(text="Test qo'shish ➕"), KeyboardButton(text="Rassilka 📢")])
+        buttons.append([KeyboardButton(text="Test qo'shish ➕"), KeyboardButton(text="Testni o'chirish 🗑")])
+        buttons.append([KeyboardButton(text="Rassilka 📢")])
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 def get_vocab_menu():
@@ -55,7 +56,8 @@ def get_vocab_menu():
         resize_keyboard=True
     )
 
-# --- START ---
+# --- ASOSIY HANDLERLAR ---
+
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message):
     cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (message.from_user.id,))
@@ -79,8 +81,7 @@ async def add_words_start(message: types.Message, state: FSMContext):
 
 @dp.message(Form.waiting_for_words)
 async def process_multi_words(message: types.Message, state: FSMContext):
-    # Agar foydalanuvchi "Orqaga" yoki boshqa menyu tugmasini bossa, so'z deb qo'shib yubormaslik uchun
-    if message.text in ["Orqaga ⬅️", "So'zlar soni 📊", "So'zni o'chirish 🗑"]:
+    if message.text in ["Orqaga ⬅️", "So'zlar soni 📊", "So'zni o'chirish 🗑", "Testlar 📝", "Lug'atlar ombori 📚"]:
         await state.clear()
         return
 
@@ -189,6 +190,29 @@ async def t_finish(message: types.Message, state: FSMContext):
     await message.answer("✅ Test saqlandi!", reply_markup=get_main_menu(ADMIN_ID))
     await state.clear()
 
+# --- ADMIN: TESTNI O'CHIRISH ---
+@dp.message(F.text == "Testni o'chirish 🗑", F.from_user.id == ADMIN_ID)
+async def show_tests_to_delete(message: types.Message):
+    cursor.execute("SELECT id, question FROM tests")
+    rows = cursor.fetchall()
+    if not rows:
+        await message.answer("O'chirish uchun testlar yo'q.")
+        return
+    builder = InlineKeyboardBuilder()
+    for r in rows:
+        short_q = (r[1][:20] + '...') if len(r[1]) > 20 else r[1]
+        builder.add(InlineKeyboardButton(text=f"🗑 {short_q}", callback_data=f"deltest_{r[0]}"))
+    builder.adjust(1)
+    await message.answer("O'chirmoqchi bo'lgan testni tanlang:", reply_markup=builder.as_markup())
+
+@dp.callback_query(F.data.startswith("deltest_"))
+async def delete_test_callback(callback: types.CallbackQuery):
+    test_id = callback.data.split("_")[1]
+    cursor.execute("DELETE FROM tests WHERE id=?", (test_id,))
+    conn.commit()
+    await callback.answer("Test o'chirildi")
+    await callback.message.edit_text("✅ Tanlangan test bazadan olib tashlandi.")
+
 # --- ADMIN: RASSILKA ---
 @dp.message(F.text == "Rassilka 📢", F.from_user.id == ADMIN_ID)
 async def bc_start(message: types.Message, state: FSMContext):
@@ -208,7 +232,7 @@ async def bc_send(message: types.Message, state: FSMContext):
     await message.answer(f"📢 {count} ta odamga yuborildi.", reply_markup=get_main_menu(ADMIN_ID))
     await state.clear()
 
-# --- ASOSIY MAIN ---
+# --- MAIN ---
 async def main():
     await dp.start_polling(bot)
 
