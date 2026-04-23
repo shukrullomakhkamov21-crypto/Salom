@@ -23,7 +23,7 @@ cursor = conn.cursor()
 cursor.execute('CREATE TABLE IF NOT EXISTS words (user_id INTEGER, word TEXT, UNIQUE(user_id, word))')
 cursor.execute('''CREATE TABLE IF NOT EXISTS tests 
                   (id INTEGER PRIMARY KEY AUTOINCREMENT, question TEXT, v1 TEXT, v2 TEXT, v3 TEXT, correct TEXT)''')
-cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)')
+cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, first_name TEXT, username TEXT)')
 conn.commit()
 
 # --- HOLATLAR (FSM) ---
@@ -44,7 +44,7 @@ def get_main_menu(user_id):
     buttons = [[KeyboardButton(text="Testlar 📝"), KeyboardButton(text="Lug'atlar ombori 📚")]]
     if user_id == ADMIN_ID:
         buttons.append([KeyboardButton(text="Test qo'shish ➕"), KeyboardButton(text="Testni o'chirish 🗑")])
-        buttons.append([KeyboardButton(text="Rassilka 📢")])
+        buttons.append([KeyboardButton(text="Foydalanuvchilar 👥"), KeyboardButton(text="Rassilka 📢")])
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 def get_vocab_menu():
@@ -56,19 +56,91 @@ def get_vocab_menu():
         resize_keyboard=True
     )
 
+# --- TEST YUBORISH FUNKSIYASI ---
+async def send_random_test(message_or_query, is_new=True):
+    cursor.execute("SELECT * FROM tests")
+    tests = cursor.fetchall()
+    
+    is_callback = isinstance(message_or_query, types.CallbackQuery)
+    target = message_or_query.message if is_callback else message_or_query
+
+    if not tests:
+        await target.answer("Hozircha testlar yo'q.")
+        return
+
+    # is_new=False bo'lsa, savolni o'zgartirmaslik kerak (lekin bu oddiy quiz bot, 
+    # shuning uchun agar hato bo'lsa xabarni o'zgartirmaymiz)
+    t = random.choice(tests)
+    vars = [t[2], t[3], t[4]]
+    random.shuffle(vars)
+    
+    builder = InlineKeyboardBuilder()
+    for v in vars:
+        builder.add(InlineKeyboardButton(text=v, callback_data=f"check_{t[0]}_{v}"))
+    builder.adjust(1)
+    
+    text = f"📝 {t[1]}"
+    if is_callback:
+        await target.edit_text(text, reply_markup=builder.as_markup())
+    else:
+        await target.answer(text, reply_markup=builder.as_markup())
+
 # --- ASOSIY HANDLERLAR ---
 
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message):
-    cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (message.from_user.id,))
-    conn.commit()
-    await message.answer(f"Salom {message.from_user.first_name}! Bo'limni tanlang:", 
-                         reply_markup=get_main_menu(message.from_user.id))
+    user_id = message.from_user.id
+    first_name = message.from_user.first_name
+    username = f"@{message.from_user.username}" if message.from_user.username else "Noma'lum"
+
+    # Yangi foydalanuvchini tekshirish
+    cursor.execute("SELECT user_id FROM users WHERE user_id=?", (user_id,))
+    user_exists = cursor.fetchone()
+
+    if not user_exists:
+        cursor.execute("INSERT INTO users (user_id, first_name, username) VALUES (?, ?, ?)", 
+                       (user_id, first_name, username))
+        conn.commit()
+        # Adminga xabar yuborish
+        await bot.send_message(ADMIN_ID, f"🔔 **Yangi foydalanuvchi!**\n\n👤 Ism: {first_name}\n🆔 ID: {user_id}\n🔗 Username: {username}")
+
+    await message.answer(f"Salom {first_name}!", reply_markup=get_main_menu(user_id))
+
+@dp.message(F.text == "Testlar 📝")
+async def start_testing(message: types.Message):
+    await send_random_test(message)
+
+@dp.callback_query(F.data.startswith("check_"))
+async def check_ans(callback: types.CallbackQuery):
+    _, tid, ans = callback.data.split("_")
+    cursor.execute("SELECT correct FROM tests WHERE id=?", (tid,))
+    correct = cursor.fetchone()[0]
+    
+    if ans == correct:
+        await callback.answer("✅ To'g'ri!", show_alert=False)
+        await send_random_test(callback) # To'g'ri bo'lsa keyingisi
+    else:
+        # Hato bo'lsa savol almashmaydi, faqat ogohlantirish beradi
+        await callback.answer("❌ Noto'g'ri! Qayta urinib ko'ring.", show_alert=True)
+
+# --- ADMIN: FOYDALANUVCHILAR ---
+@dp.message(F.text == "Foydalanuvchilar 👥", F.from_user.id == ADMIN_ID)
+async def list_users(message: types.Message):
+    cursor.execute("SELECT first_name, username FROM users")
+    rows = cursor.fetchall()
+    if not rows:
+        await message.answer("Foydalanuvchilar hali yo'q.")
+        return
+    
+    text = f"👥 **Jami foydalanuvchilar:** {len(rows)} ta\n\n"
+    for r in rows[:30]: # Dastlabki 30 tasini ko'rsatish
+        text += f"• {r[0]} ({r[1]})\n"
+    await message.answer(text)
 
 # --- LUG'ATLAR OMBORI ---
 @dp.message(F.text == "Lug'atlar ombori 📚")
 async def vocab_home(message: types.Message):
-    await message.answer("Lug'atlar bo'limi. Tanlang:", reply_markup=get_vocab_menu())
+    await message.answer("Lug'atlar bo'limi:", reply_markup=get_vocab_menu())
 
 @dp.message(F.text == "Orqaga ⬅️")
 async def go_back(message: types.Message):
@@ -76,88 +148,28 @@ async def go_back(message: types.Message):
 
 @dp.message(F.text == "So'z qo'shish ➕")
 async def add_words_start(message: types.Message, state: FSMContext):
-    await message.answer("So'zlarni kiriting (Bir nechta bo'lsa har birini yangi qatordan yozing):")
+    await message.answer("So'zlarni kiriting (har birini yangi qatordan):")
     await state.set_state(Form.waiting_for_words)
 
 @dp.message(Form.waiting_for_words)
 async def process_multi_words(message: types.Message, state: FSMContext):
-    if message.text in ["Orqaga ⬅️", "So'zlar soni 📊", "So'zni o'chirish 🗑", "Testlar 📝", "Lug'atlar ombori 📚"]:
+    if message.text in ["Orqaga ⬅️", "So'zlar soni 📊", "So'zni o'chirish 🗑"]:
         await state.clear()
         return
-
     raw_text = message.text.strip().split('\n')
-    added, skipped = 0, 0
+    added = 0
     for line in raw_text:
         word = line.strip().lower()
         if word:
             try:
                 cursor.execute("INSERT INTO words (user_id, word) VALUES (?, ?)", (message.from_user.id, word))
                 added += 1
-            except sqlite3.IntegrityError:
-                skipped += 1
+            except: continue
     conn.commit()
-    await message.answer(f"✅ {added} ta qo'shildi. ⚠️ {skipped} ta bor edi.", reply_markup=get_vocab_menu())
+    await message.answer(f"✅ {added} ta qo'shildi.", reply_markup=get_vocab_menu())
     await state.clear()
 
-@dp.message(F.text == "So'zlar soni 📊")
-async def count_words(message: types.Message):
-    cursor.execute("SELECT word FROM words WHERE user_id=?", (message.from_user.id,))
-    rows = cursor.fetchall()
-    if not rows:
-        await message.answer("Lug'at bo'sh.")
-    else:
-        text = f"Jami: {len(rows)} ta so'z.\n\n" + "\n".join([f"• {r[0]}" for r in rows[-20:]])
-        await message.answer(text)
-
-@dp.message(F.text == "So'zni o'chirish 🗑")
-async def delete_word_list(message: types.Message):
-    cursor.execute("SELECT word FROM words WHERE user_id=?", (message.from_user.id,))
-    rows = cursor.fetchall()
-    if not rows:
-        await message.answer("O'chirishga so'z yo'q.")
-        return
-    builder = InlineKeyboardBuilder()
-    for r in rows:
-        builder.add(InlineKeyboardButton(text=f"❌ {r[0]}", callback_data=f"del_{r[0]}"))
-    builder.adjust(2)
-    await message.answer("O'chirish uchun tanlang:", reply_markup=builder.as_markup())
-
-@dp.callback_query(F.data.startswith("del_"))
-async def delete_call(callback: types.CallbackQuery):
-    word = callback.data.split("_")[1]
-    cursor.execute("DELETE FROM words WHERE user_id=? AND word=?", (callback.from_user.id, word))
-    conn.commit()
-    await callback.answer(f"{word} o'chirildi")
-    await callback.message.answer(f"🗑 '{word}' olib tashlandi.")
-
-# --- TESTLAR BO'LIMI ---
-@dp.message(F.text == "Testlar 📝")
-async def send_test(message: types.Message):
-    cursor.execute("SELECT * FROM tests")
-    tests = cursor.fetchall()
-    if not tests:
-        await message.answer("Hozircha testlar yo'q.")
-        return
-    t = random.choice(tests)
-    vars = [t[2], t[3], t[4]]
-    random.shuffle(vars)
-    builder = InlineKeyboardBuilder()
-    for v in vars:
-        builder.add(InlineKeyboardButton(text=v, callback_data=f"check_{t[0]}_{v}"))
-    builder.adjust(1)
-    await message.answer(f"📝 {t[1]}", reply_markup=builder.as_markup())
-
-@dp.callback_query(F.data.startswith("check_"))
-async def check_ans(callback: types.CallbackQuery):
-    _, tid, ans = callback.data.split("_")
-    cursor.execute("SELECT correct FROM tests WHERE id=?", (tid,))
-    correct = cursor.fetchone()[0]
-    if ans == correct:
-        await callback.message.edit_text(f"✅ To'g'ri! Javob: {correct}")
-    else:
-        await callback.answer(f"❌ Noto'g'ri variant!", show_alert=True)
-
-# --- ADMIN: TEST QO'SHISH ---
+# --- QOLGAN ADMIN FUNKSIYALARI (TEST QO'SHISH/O'CHIRISH/RASSILKA) ---
 @dp.message(F.text == "Test qo'shish ➕", F.from_user.id == ADMIN_ID)
 async def t_start(message: types.Message, state: FSMContext):
     await message.answer("Savolni kiriting:")
@@ -190,54 +202,44 @@ async def t_finish(message: types.Message, state: FSMContext):
     await message.answer("✅ Test saqlandi!", reply_markup=get_main_menu(ADMIN_ID))
     await state.clear()
 
-# --- ADMIN: TESTNI O'CHIRISH ---
 @dp.message(F.text == "Testni o'chirish 🗑", F.from_user.id == ADMIN_ID)
 async def show_tests_to_delete(message: types.Message):
     cursor.execute("SELECT id, question FROM tests")
     rows = cursor.fetchall()
     if not rows:
-        await message.answer("O'chirish uchun testlar yo'q.")
+        await message.answer("Testlar yo'q.")
         return
     builder = InlineKeyboardBuilder()
     for r in rows:
-        short_q = (r[1][:20] + '...') if len(r[1]) > 20 else r[1]
-        builder.add(InlineKeyboardButton(text=f"🗑 {short_q}", callback_data=f"deltest_{r[0]}"))
+        builder.add(InlineKeyboardButton(text=f"🗑 {r[1][:20]}...", callback_data=f"dt_{r[0]}"))
     builder.adjust(1)
-    await message.answer("O'chirmoqchi bo'lgan testni tanlang:", reply_markup=builder.as_markup())
+    await message.answer("O'chirish uchun tanlang:", reply_markup=builder.as_markup())
 
-@dp.callback_query(F.data.startswith("deltest_"))
+@dp.callback_query(F.data.startswith("dt_"))
 async def delete_test_callback(callback: types.CallbackQuery):
-    test_id = callback.data.split("_")[1]
-    cursor.execute("DELETE FROM tests WHERE id=?", (test_id,))
+    tid = callback.data.split("_")[1]
+    cursor.execute("DELETE FROM tests WHERE id=?", (tid,))
     conn.commit()
-    await callback.answer("Test o'chirildi")
-    await callback.message.edit_text("✅ Tanlangan test bazadan olib tashlandi.")
+    await callback.answer("O'chirildi")
+    await callback.message.edit_text("✅ Test olib tashlandi.")
 
-# --- ADMIN: RASSILKA ---
 @dp.message(F.text == "Rassilka 📢", F.from_user.id == ADMIN_ID)
 async def bc_start(message: types.Message, state: FSMContext):
-    await message.answer("Yubormoqchi bo'lgan xabaringizni yozing:")
+    await message.answer("Xabarni yozing:")
     await state.set_state(Broadcast.waiting_for_msg)
 
 @dp.message(Broadcast.waiting_for_msg)
 async def bc_send(message: types.Message, state: FSMContext):
     cursor.execute("SELECT user_id FROM users")
     users = cursor.fetchall()
-    count = 0
     for u in users:
-        try:
-            await bot.send_message(u[0], message.text)
-            count += 1
+        try: await bot.send_message(u[0], message.text)
         except: continue
-    await message.answer(f"📢 {count} ta odamga yuborildi.", reply_markup=get_main_menu(ADMIN_ID))
+    await message.answer("📢 Yuborildi.", reply_markup=get_main_menu(ADMIN_ID))
     await state.clear()
 
-# --- MAIN ---
 async def main():
     await dp.start_polling(bot)
 
 if __name__ == '__main__':
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        pass
+    asyncio.run(main())
