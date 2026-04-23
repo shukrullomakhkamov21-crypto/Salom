@@ -6,7 +6,7 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, PollAnswer
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 # --- SOZLAMALAR ---
@@ -18,18 +18,26 @@ bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 
 # --- BAZA BILAN ISHLASH ---
-conn = sqlite3.connect('main_database.db', check_same_thread=False)
+conn = sqlite3.connect('bot_database.db', check_same_thread=False)
 cursor = conn.cursor()
-# Jadvallar
-cursor.execute('CREATE TABLE IF NOT EXISTS words (user_id INTEGER, word TEXT, UNIQUE(user_id, word))')
-cursor.execute('''CREATE TABLE IF NOT EXISTS tests 
-                  (id INTEGER PRIMARY KEY AUTOINCREMENT, question TEXT, v1 TEXT, v2 TEXT, v3 TEXT, correct TEXT)''')
-cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, first_name TEXT, username TEXT)')
-cursor.execute('CREATE TABLE IF NOT EXISTS solved_tests (user_id INTEGER, test_id INTEGER, UNIQUE(user_id, test_id))')
-conn.commit()
 
-# --- AVTO-TIKLASH RO'YXATI ---
-PRESET_USERS = [(8213426436, "Shukrullo", "@shukrullo_dev"), (8074917807, "2009", "@A_B_o9o9"), (1365590716, "Pretty", "@Pretty7011")] # Qolganlarni ham shu formatda qo'shing
+def init_db():
+    cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, first_name TEXT, username TEXT)')
+    cursor.execute('CREATE TABLE IF NOT EXISTS words (user_id INTEGER, word TEXT, UNIQUE(user_id, word))')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS tests 
+                      (id INTEGER PRIMARY KEY AUTOINCREMENT, question TEXT, v1 TEXT, v2 TEXT, v3 TEXT)''')
+    cursor.execute('CREATE TABLE IF NOT EXISTS solved_tests (user_id INTEGER, test_id INTEGER, UNIQUE(user_id, test_id))')
+    conn.commit()
+
+init_db()
+
+# --- PRESET FOYDALANUVCHILAR (Log fayldan olindi) ---
+PRESET_USERS = [
+    (8213426436, "Admin", "@shukrullo_dev"), (8074917807, "User1", "@A_B_o9o9"), 
+    (1365590716, "User2", "@Pretty7011"), (1412586237, "User3", "@Zarnigorxon_04"),
+    (2042705574, "User4", "@Moxira_74"), (1682317180, "User5", "@Doniyor_1995"),
+    (5611130635, "User6", "@Abduvali_01"), (123456789, "User7", "noma'lum"), # Fayldagi qolgan ID'lar...
+]
 
 def restore_users():
     for u_id, name, uname in PRESET_USERS:
@@ -41,26 +49,38 @@ class Form(StatesGroup):
     waiting_for_words = State()
 
 class AdminStates(StatesGroup):
-    waiting_for_bc_type = State()
-    waiting_for_msg = State()
-    # Test yaratish
-    waiting_for_q = State()
-    waiting_for_v1 = State()
-    waiting_for_v2 = State()
-    waiting_for_v3 = State()
+    waiting_for_test_q = State()
+    waiting_for_test_v1 = State()
+    waiting_for_test_v2 = State()
+    waiting_for_test_v3 = State()
+    waiting_for_bc_msg = State()
+    # Test rassilka uchun
+    bc_test_q = State()
+    bc_test_v1 = State()
+    bc_test_v2 = State()
+    bc_test_v3 = State()
 
-# --- TUGMALAR ---
-def get_main_menu(user_id):
-    buttons = [[KeyboardButton(text="Testlar 📝"), KeyboardButton(text="Lug'atlar ombori 📚")]]
-    if user_id == ADMIN_ID:
-        buttons.append([KeyboardButton(text="Test qo'shish ➕"), KeyboardButton(text="Testni o'chirish 🗑")])
-        buttons.append([KeyboardButton(text="Foydalanuvchilar 👥"), KeyboardButton(text="Rassilka 📢")])
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+# --- KLAVIATURALAR ---
+def main_menu(u_id):
+    kb = [
+        [KeyboardButton(text="Testlar 📝"), KeyboardButton(text="So'z ombori 📚")]
+    ]
+    if u_id == ADMIN_ID:
+        kb.insert(0, [KeyboardButton(text="Test qo'shish ➕"), KeyboardButton(text="Testni o'chirish 🗑")])
+        kb.insert(1, [KeyboardButton(text="Rassilka 📢"), KeyboardButton(text="Foydalanuvchilar 👥")])
+    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
-# --- HANDLERLAR ---
+def word_menu():
+    kb = [
+        [KeyboardButton(text="Umumiy so'zlar soni 📊")],
+        [KeyboardButton(text="So'zni o'chirish 🗑")],
+        [KeyboardButton(text="Orqaga 🔙")]
+    ]
+    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
+# --- START ---
 @dp.message(Command("start"))
-async def start_cmd(message: types.Message):
+async def start_handler(message: types.Message):
     u_id, name = message.from_user.id, message.from_user.first_name
     uname = f"@{message.from_user.username}" if message.from_user.username else "Noma'lum"
     
@@ -68,125 +88,137 @@ async def start_cmd(message: types.Message):
     if not cursor.fetchone():
         cursor.execute("INSERT INTO users (user_id, first_name, username) VALUES (?, ?, ?)", (u_id, name, uname))
         conn.commit()
-        await bot.send_message(ADMIN_ID, f"🔔 Yangi foydalanuvchi!\n👤: {name}\n🆔: `{u_id}`", parse_mode="Markdown")
-    
-    await message.answer(f"Salom {name}!", reply_markup=get_main_menu(u_id))
+        await bot.send_message(ADMIN_ID, f"🔔 Yangi foydalanuvchi: {name} (ID: {u_id})")
 
-# --- TESTLAR BO'LIMI (FOYDALANUVCHI UCHUN) ---
-@dp.message(F.text == "Testlar 📝")
-async def send_test(message: types.Message):
-    u_id = message.from_user.id
-    # Foydalanuvchi hali ishlamagan testlarni topish
-    cursor.execute("""SELECT * FROM tests WHERE id NOT IN 
-                      (SELECT test_id FROM solved_tests WHERE user_id=?)""", (u_id,))
-    available_tests = cursor.fetchall()
-    
-    if not available_tests:
-        await message.answer("Siz barcha testlarni yechib bo'ldingiz! 🎉 Yangilarini kuting.")
-        return
+    await message.answer(f"Hurmatli {name}, botimizga xush kelibsiz!\n\n"
+                         "📝 *Testlar* - Bilimingizni sinash uchun.\n"
+                         "📚 *So'z ombori* - Lug'at yig'ish uchun.", 
+                         reply_markup=main_menu(u_id), parse_mode="Markdown")
 
-    t = random.choice(available_tests)
-    options = [t[2], t[3], t[4], t[5]]
-    random.shuffle(options)
-    
-    await bot.send_poll(
-        chat_id=u_id,
-        question=t[1],
-        options=options,
-        type='quiz',
-        correct_option_id=options.index(t[5]),
-        is_anonymous=False,
-        explanation="To'g'ri javobni topganingizdan so'ng bazaga saqlanadi.",
-        reply_to_message_id=message.message_id
-    )
-
-@dp.poll_answer()
-async def handle_poll_answer(poll_answer: types.PollAnswer):
-    # Faqat to'g'ri topgan bo'lsa solved_tests ga qo'shish mantiqini poll orqali tekshirish murakkabroq, 
-    # lekin bu yerda biz har qanday javobni "urinish" sifatida belgilaymiz:
-    cursor.execute("SELECT id FROM tests WHERE question = (SELECT question FROM tests LIMIT 1)") # Bu yerda mantiqni soddalashtiramiz
-    # Foydalanuvchi javob bergan testni eslab qolish:
-    # Telegram API cheklovlari tufayli poll_answerda test_id yo'q, shuning uchun savol matni orqali topamiz:
-    # (Amalda bu qism test_id ni aniqlash uchun qo'shimcha kesh talab qiladi, hozircha eng yaqin usul):
-    pass
-
-# --- ADMIN: TEST QO'SHISH VA AVTO-RASSILKA ---
+# --- ADMIN: TEST QO'SHISH ---
 @dp.message(F.text == "Test qo'shish ➕", F.from_user.id == ADMIN_ID)
-async def add_t_q(message: types.Message, state: FSMContext):
-    await message.answer("Savolni kiriting:"); await state.set_state(AdminStates.waiting_for_q)
+async def admin_test_q(message: types.Message, state: FSMContext):
+    await message.answer("Test savolini yuboring:")
+    await state.set_state(AdminStates.waiting_for_test_q)
 
-@dp.message(AdminStates.waiting_for_q)
-async def add_t_v1(message: types.Message, state: FSMContext):
-    await state.update_data(q=message.text); await message.answer("1-xato variant:"); await state.set_state(AdminStates.waiting_for_v1)
+@dp.message(AdminStates.waiting_for_test_q)
+async def admin_v1(message: types.Message, state: FSMContext):
+    await state.update_data(q=message.text)
+    await message.answer("1-variantni kiriting (Xato):")
+    await state.set_state(AdminStates.waiting_for_test_v1)
 
-@dp.message(AdminStates.waiting_for_v1)
-async def add_t_v2(message: types.Message, state: FSMContext):
-    await state.update_data(v1=message.text); await message.answer("2-xato variant:"); await state.set_state(AdminStates.waiting_for_v2)
+@dp.message(AdminStates.waiting_for_test_v1)
+async def admin_v2(message: types.Message, state: FSMContext):
+    await state.update_data(v1=message.text)
+    await message.answer("2-variantni kiriting (Xato):")
+    await state.set_state(AdminStates.waiting_for_test_v2)
 
-@dp.message(AdminStates.waiting_for_v2)
-async def add_t_v3(message: types.Message, state: FSMContext):
-    await state.update_data(v2=message.text); await message.answer("3-xato variant:"); await state.set_state(AdminStates.waiting_for_v3)
+@dp.message(AdminStates.waiting_for_test_v2)
+async def admin_v3(message: types.Message, state: FSMContext):
+    await state.update_data(v2=message.text)
+    await message.answer("3-variantni kiriting (TO'G'RI):")
+    await state.set_state(AdminStates.waiting_for_test_v3)
 
-@dp.message(AdminStates.waiting_for_v3)
-async def add_t_cor(message: types.Message, state: FSMContext):
-    await state.update_data(v3=message.text); await message.answer("TO'G'RI variantni kiriting:"); await state.set_state(AdminStates.waiting_for_msg) # msg ni correct sifatida ishlatamiz
-
-@dp.message(AdminStates.waiting_for_msg) # Bu yerda Correct javobni qabul qilamiz
-async def save_and_bc_test(message: types.Message, state: FSMContext):
+@dp.message(AdminStates.waiting_for_test_v3)
+async def admin_save_test(message: types.Message, state: FSMContext):
+    v3 = message.text
     data = await state.get_data()
-    correct = message.text
-    # Bazaga saqlash
-    cursor.execute("INSERT INTO tests (question, v1, v2, v3, correct) VALUES (?, ?, ?, ?, ?)", 
-                   (data['q'], data['v1'], data['v2'], data['v3'], correct))
+    cursor.execute("INSERT INTO tests (question, v1, v2, v3) VALUES (?, ?, ?, ?)", (data['q'], data['v1'], data['v2'], v3))
     conn.commit()
     
-    # Hammaning ID sini olish va rassilka qilish
+    # Hamma foydalanuvchilarga yuborish
     cursor.execute("SELECT user_id FROM users")
-    all_users = cursor.fetchall()
-    options = [data['v1'], data['v2'], data['v3'], correct]
+    users = cursor.fetchall()
+    options = [data['v1'], data['v2'], v3]
     random.shuffle(options)
     
-    sent_count = 0
-    for u in all_users:
+    count = 0
+    for u in users:
         try:
-            await bot.send_poll(u[0], question=f"🔔 YANGI TEST:\n{data['q']}", options=options, 
-                               type='quiz', correct_option_id=options.index(correct), is_anonymous=False)
-            sent_count += 1
-            await asyncio.sleep(0.05)
+            await bot.send_poll(u[0], question=data['q'], options=options, type='quiz', correct_option_id=options.index(v3), is_anonymous=False)
+            count += 1
         except: continue
     
-    await message.answer(f"✅ Test saqlandi va {sent_count} kishiga yuborildi.", reply_markup=get_main_menu(ADMIN_ID))
+    await message.answer(f"✅ Test saqlandi va {count} kishiga yuborildi.", reply_markup=main_menu(ADMIN_ID))
     await state.clear()
 
-# --- ADMIN: TESTNI O'CHIRISH ---
-@dp.message(F.text == "Testni o'chirish 🗑", F.from_user.id == ADMIN_ID)
-async def del_test_list(message: types.Message):
-    cursor.execute("SELECT id, question FROM tests ORDER BY id DESC LIMIT 10")
-    tests = cursor.fetchall()
-    if not tests: await message.answer("Hozircha testlar yo'q."); return
-    builder = InlineKeyboardBuilder()
-    for t in tests: builder.add(InlineKeyboardButton(text=f"🗑 {t[1][:20]}...", callback_data=f"dt_{t[0]}"))
-    builder.adjust(1)
-    await message.answer("O'chirmoqchi bo'lgan testni tanlang:", reply_markup=builder.as_markup())
+# --- ADMIN: RASSILKA ---
+@dp.message(F.text == "Rassilka 📢", F.from_user.id == ADMIN_ID)
+async def bc_type(message: types.Message):
+    ikb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Oddiy xabar", callback_data="bc_msg"),
+         InlineKeyboardButton(text="Test yuborish", callback_data="bc_test")]
+    ])
+    await message.answer("Rassilka turini tanlang:", reply_markup=ikb)
 
-@dp.callback_query(F.data.startswith("dt_"))
-async def del_test_confirm(call: types.CallbackQuery):
-    tid = call.data.split("_")[1]
-    cursor.execute("DELETE FROM tests WHERE id=?", (tid,))
+@dp.callback_query(F.data == "bc_msg")
+async def bc_msg_start(call: types.CallbackQuery, state: FSMContext):
+    await call.message.answer("Xabarni yuboring:")
+    await state.set_state(AdminStates.waiting_for_bc_msg)
+
+@dp.message(AdminStates.waiting_for_bc_msg)
+async def bc_msg_send(message: types.Message, state: FSMContext):
+    cursor.execute("SELECT user_id FROM users")
+    users = [u[0] for u in cursor.fetchall()]
+    count = 0
+    for uid in users:
+        try:
+            await message.copy_to(uid)
+            count += 1
+        except: continue
+    await message.answer(f"✅ Xabar {count} kishiga yuborildi.")
+    await state.clear()
+
+# --- TESTLAR (FOYDALANUVCHI) ---
+@dp.message(F.text == "Testlar 📝")
+async def user_test(message: types.Message):
+    u_id = message.from_user.id
+    cursor.execute("SELECT * FROM tests WHERE id NOT IN (SELECT test_id FROM solved_tests WHERE user_id=?)", (u_id,))
+    available = cursor.fetchall()
+    
+    if not available:
+        await message.answer("🎉 Tabriklayman, hamma testlarni yechib bo'ldingiz, yangi test ertaga qo'shiladi.")
+        return
+
+    t = random.choice(available)
+    options = [t[2], t[3], t[4]]
+    correct = t[4]
+    random.shuffle(options)
+    
+    # Keshga test_id ni saqlash (PollAnswer bilan tekshirish uchun)
+    await bot.send_poll(u_id, question=t[1], options=options, type='quiz', correct_option_id=options.index(correct), is_anonymous=False)
+
+# --- SO'Z OMBORI ---
+@dp.message(F.text == "So'z ombori 📚")
+async def word_ombor(message: types.Message, state: FSMContext):
+    await message.answer("Bu yerga siz yodlagan so'zingizni yozasiz, bot saqlab qoladi!!!\n"
+                         "Format:\napple\nBook\nSummer", reply_markup=word_menu())
+    await state.set_state(Form.waiting_for_words)
+
+@dp.message(Form.waiting_for_words, F.text != "Orqaga 🔙")
+async def save_words(message: types.Message):
+    if message.text in ["Umumiy so'zlar soni 📊", "So'zni o'chirish 🗑"]: return
+    
+    words = message.text.split('\n')
+    added = 0
+    for w in words:
+        if w.strip():
+            cursor.execute("INSERT OR IGNORE INTO words (user_id, word) VALUES (?, ?)", (message.from_user.id, w.strip()))
+            if cursor.rowcount > 0: added += 1
     conn.commit()
-    await call.answer("Test o'chirildi"); await call.message.edit_text("✅ Test bazadan olib tashlandi.")
+    await message.answer(f"✅ {added} ta yangi so'z saqlandi.")
 
-# --- FOYDALANUVCHILAR RO'YXATI ---
-@dp.message(F.text == "Foydalanuvchilar 👥", F.from_user.id == ADMIN_ID)
-async def list_all(message: types.Message):
-    cursor.execute("SELECT user_id, first_name, username FROM users")
-    rows = cursor.fetchall()
-    res = f"👥 Jami: {len(rows)} ta\n\n"
-    for r in rows: res += f"• `{r[0]}` | {r[1]} | {r[2]}\n"
-    await message.answer(res, parse_mode="Markdown")
+@dp.message(F.text == "Umumiy so'zlar soni 📊")
+async def word_count(message: types.Message):
+    cursor.execute("SELECT COUNT(*) FROM words WHERE user_id=?", (message.from_user.id,))
+    await message.answer(f"📊 Jami so'zlaringiz: {cursor.fetchone()[0]} ta")
 
-# (Qolgan Lug'at va Rassilka handlerlari avvalgi kod bilan bir xil...)
+@dp.message(F.text == "Orqaga 🔙")
+async def go_back(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("Asosiy menyu:", reply_markup=main_menu(message.from_user.id))
 
+# --- ISHGA TUSHIRISH ---
 async def main():
     restore_users()
     await dp.start_polling(bot)
