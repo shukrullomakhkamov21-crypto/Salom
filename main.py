@@ -10,7 +10,7 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMar
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 # --- SOZLAMALAR ---
-API_TOKEN = '8750077178:AAFgDf_LDL11-cYvg_KGZUboTnkH-oWPFak' # BotFather bergan tokenni bura yozing
+API_TOKEN = '8750077178:AAFgDf_LDL11-cYvg_KGZUboTnkH-oWPFak' # Tokeningizni kiriting
 ADMIN_ID = 8213426436 
 
 logging.basicConfig(level=logging.INFO)
@@ -20,26 +20,23 @@ dp = Dispatcher()
 # --- BAZA BILAN ISHLASH ---
 conn = sqlite3.connect('main_database.db', check_same_thread=False)
 cursor = conn.cursor()
-# Lug'at jadvali
 cursor.execute('CREATE TABLE IF NOT EXISTS words (user_id INTEGER, word TEXT, UNIQUE(user_id, word))')
-# Testlar jadvali
 cursor.execute('''CREATE TABLE IF NOT EXISTS tests 
                   (id INTEGER PRIMARY KEY AUTOINCREMENT, question TEXT, v1 TEXT, v2 TEXT, v3 TEXT, correct TEXT)''')
-# Foydalanuvchilar (Rassilka uchun)
 cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)')
 conn.commit()
 
 # --- HOLATLAR (FSM) ---
 class Form(StatesGroup):
-    waiting_for_words = State() # Lug'at uchun
+    waiting_for_words = State()
 
-class TestCreate(StatesGroup): # Test yaratish uchun
+class TestCreate(StatesGroup):
     waiting_for_question = State()
     waiting_for_v1 = State()
     waiting_for_v2 = State()
     waiting_for_v3 = State()
 
-class Broadcast(StatesGroup): # Rassilka uchun
+class Broadcast(StatesGroup):
     waiting_for_msg = State()
 
 # --- TUGMALAR ---
@@ -58,16 +55,15 @@ def get_vocab_menu():
         resize_keyboard=True
     )
 
-# --- ASOSIY HANDLERLAR ---
-
+# --- START ---
 @dp.message(Command("start"))
-async def start(message: types.Message):
+async def start_cmd(message: types.Message):
     cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (message.from_user.id,))
     conn.commit()
     await message.answer(f"Salom {message.from_user.first_name}! Bo'limni tanlang:", 
                          reply_markup=get_main_menu(message.from_user.id))
 
-# --- LUG'ATLAR OMBORI BO'LIMI ---
+# --- LUG'ATLAR OMBORI ---
 @dp.message(F.text == "Lug'atlar ombori 📚")
 async def vocab_home(message: types.Message):
     await message.answer("Lug'atlar bo'limi. Tanlang:", reply_markup=get_vocab_menu())
@@ -83,6 +79,11 @@ async def add_words_start(message: types.Message, state: FSMContext):
 
 @dp.message(Form.waiting_for_words)
 async def process_multi_words(message: types.Message, state: FSMContext):
+    # Agar foydalanuvchi "Orqaga" yoki boshqa menyu tugmasini bossa, so'z deb qo'shib yubormaslik uchun
+    if message.text in ["Orqaga ⬅️", "So'zlar soni 📊", "So'zni o'chirish 🗑"]:
+        await state.clear()
+        return
+
     raw_text = message.text.strip().split('\n')
     added, skipped = 0, 0
     for line in raw_text:
@@ -153,7 +154,7 @@ async def check_ans(callback: types.CallbackQuery):
     if ans == correct:
         await callback.message.edit_text(f"✅ To'g'ri! Javob: {correct}")
     else:
-        await callback.answer(f"❌ Noto'g'ri!", show_alert=True)
+        await callback.answer(f"❌ Noto'g'ri variant!", show_alert=True)
 
 # --- ADMIN: TEST QO'SHISH ---
 @dp.message(F.text == "Test qo'shish ➕", F.from_user.id == ADMIN_ID)
@@ -204,11 +205,15 @@ async def bc_send(message: types.Message, state: FSMContext):
             await bot.send_message(u[0], message.text)
             count += 1
         except: continue
-    await message.answer(f"📢 {count} ta odamga yuborildi.")
+    await message.answer(f"📢 {count} ta odamga yuborildi.", reply_markup=get_main_menu(ADMIN_ID))
     await state.clear()
 
+# --- ASOSIY MAIN ---
 async def main():
     await dp.start_polling(bot)
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
