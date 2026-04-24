@@ -14,6 +14,10 @@ ADMIN_LIST = [8213426436, 8562020437]
 
 bot_s, bot_t = Bot(token=TOKEN_SHOP), Bot(token=TOKEN_TEST)
 dp_s, dp_t = Dispatcher(storage=MemoryStorage()), Dispatcher(storage=MemoryStorage())
+# --- ADMIN FILTRI ---
+class IsAdmin(BaseFilter):
+    async def __call__(self, m: types.Message) -> bool:
+        return m.from_user.id in ADMIN_LIST
 
 # --- DATABASE ---
 class Database:
