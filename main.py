@@ -75,6 +75,21 @@ async def shop_bc_send(m: types.Message, state: FSMContext):
         try: await m.copy_to(u[0]); count += 1
         except: continue
     await m.answer(f"✅ {count} kishiga yuborildi."); await state.clear()
+# --- SHOP BOT: GURUH QO'SHISH FUNKSIYASI ---
+@dp_s.message(F.text == "➕ Guruh qo'shish", F.from_user.id.in_(ADMINS))
+async def shop_add_start(m: types.Message, state: FSMContext):
+    await m.answer("Guruh linkini yuboring:"); await state.set_state(ShopStates.link)
+
+@dp_s.message(ShopStates.link)
+async def shop_add_link(m: types.Message, state: FSMContext):
+    await state.update_data(link=m.text); await m.answer("Narxini yozing:"); await state.set_state(ShopStates.price)
+
+@dp_s.message(ShopStates.price)
+async def shop_add_price(m: types.Message, state: FSMContext):
+    data = await state.get_data()
+    db_query("INSERT INTO shop_groups (link, price, admin) VALUES (?, ?, ?)", 
+             (data['link'], m.text, f"@{m.from_user.username or 'admin'}"))
+    await m.answer("✅ Guruh muvaffaqiyatli qo'shildi!"); await state.clear()
 
 # --- 2-BOT (TEST & WORDS) HANDLERLARI ---
 @dp_t.message(Command("start"))
