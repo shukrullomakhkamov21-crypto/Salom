@@ -12,7 +12,7 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMar
 # --- SOZLAMALAR ---
 TOKEN_SHOP = '8737514748:AAEeJwwzVf6e0yzYlwXRT8N0UrvsULGCapI'
 TOKEN_TEST = '8750077178:AAFgDf_LDL11-cYvg_KGZUboTnkH-oWPFak'
-ADMIN_ID = 8213426436
+ADMIN_ID = [8213426436, 8562020437]
 
 logging.basicConfig(level=logging.INFO)
 bot_shop, bot_test = Bot(token=TOKEN_SHOP), Bot(token=TOKEN_TEST)
