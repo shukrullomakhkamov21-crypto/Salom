@@ -2,7 +2,6 @@ import logging
 import sqlite3
 import asyncio
 import random
-from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -23,12 +22,14 @@ dp_s, dp_t = Dispatcher(storage=MemoryStorage()), Dispatcher(storage=MemoryStora
 # --- BAZA MANTIQI ---
 def db_query(sql, params=(), fetch=False):
     conn = sqlite3.connect('final_pro_v5.db', check_same_thread=False)
-    cursor = conn.cursor()
-    cursor.execute(sql, params)
-    res = cursor.fetchall() if fetch else None
-    conn.commit()
-    conn.close()
-    return res
+    try:
+        cursor = conn.cursor()
+        cursor.execute(sql, params)
+        res = cursor.fetchall() if fetch else None
+        conn.commit()
+        return res
+    finally:
+        conn.close()
 
 def init_db():
     db_query('CREATE TABLE IF NOT EXISTS shop_groups (id INTEGER PRIMARY KEY, link TEXT, price TEXT, admin TEXT)')
@@ -39,43 +40,34 @@ def init_db():
     db_query('CREATE TABLE IF NOT EXISTS solved (user_id INTEGER, test_id INTEGER, UNIQUE(user_id, test_id))')
 
 # --- STATES ---
-class AdminStates(StatesGroup): q=State(); v1=State(); v2=State(); v3=State(); bc=State(); del_w=State(); del_t=State()
+class ShopStates(StatesGroup): link = State(); price = State(); bc = State()
+class AdminStates(StatesGroup): q=State(); v1=State(); v2=State(); v3=State(); bc=State(); del_t=State(); del_w=State()
 
-# --- ERTALABKI XABAR (5:00 AM) ---
+# --- ERTALABKI BUDILNIK (05:00) ---
 async def morning_alarm():
     users = db_query("SELECT user_id FROM test_users", fetch=True)
     for u in users:
         try: await bot_t.send_message(u[0], "☀️ Diqqat Diqqat uyg'oning!")
         except: pass
 
-# --- ADMIN UCHUN UMUMIY FUNKSIYALAR ---
-async def send_new_user_alert(user_id, name, bot_type):
-    for admin in ADMINS:
-        try: await bot_t.send_message(admin, f"👤 Yangi foydalanuvchi ({bot_type}):\nID: {user_id}\nIsm: {name}")
-        except: pass
-
-# --- 1-BOT (SHOP) HANDLERLARI ---
+# --- 1-BOT (SHOP) ---
 @dp_s.message(Command("start"))
 async def shop_start(m: types.Message):
-    if db_query("INSERT OR IGNORE INTO shop_users (user_id) VALUES (?)", (m.from_user.id,)):
-        await send_new_user_alert(m.from_user.id, m.from_user.full_name, "Shop Bot")
+    db_query("INSERT OR IGNORE INTO shop_users (user_id) VALUES (?)", (m.from_user.id,))
     kb = [[KeyboardButton(text="🛒 Guruhlar")]]
-    if m.from_user.id in ADMINS: kb.append([KeyboardButton(text="📢 Rassilka"), KeyboardButton(text="👥 Foydalanuvchilar")])
+    if m.from_user.id in ADMINS:
+        kb.append([KeyboardButton(text="📢 Rassilka"), KeyboardButton(text="➕ Guruh qo'shish")])
+        kb.append([KeyboardButton(text="👥 Foydalanuvchilar")])
     await m.answer("Sotuv botiga xush kelibsiz!", reply_markup=ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True))
 
-@dp_s.message(F.text == "📢 Rassilka", F.from_user.id.in_(ADMINS))
-async def shop_bc(m: types.Message, state: FSMContext):
-    await m.answer("Xabarni yuboring:"); await state.set_state(AdminStates.bc)
+@dp_s.message(F.text == "🛒 Guruhlar")
+async def show_shop_groups(m: types.Message):
+    groups = db_query("SELECT link, price, admin FROM shop_groups", fetch=True)
+    if not groups: return await m.answer("Hozircha guruhlar yo'q.")
+    text = "🚀 **Sotuvdagi guruhlar:**\n\n"
+    for g in groups: text += f"📢 {g[0]}\n💰 Narxi: {g[1]}\n👤 Admin: {g[2]}\n\n"
+    await m.answer(text, parse_mode="Markdown")
 
-@dp_s.message(AdminStates.bc)
-async def shop_bc_send(m: types.Message, state: FSMContext):
-    users = db_query("SELECT user_id FROM shop_users", fetch=True)
-    count = 0
-    for u in users:
-        try: await m.copy_to(u[0]); count += 1
-        except: continue
-    await m.answer(f"✅ {count} kishiga yuborildi."); await state.clear()
-# --- SHOP BOT: GURUH QO'SHISH FUNKSIYASI ---
 @dp_s.message(F.text == "➕ Guruh qo'shish", F.from_user.id.in_(ADMINS))
 async def shop_add_start(m: types.Message, state: FSMContext):
     await m.answer("Guruh linkini yuboring:"); await state.set_state(ShopStates.link)
@@ -87,11 +79,10 @@ async def shop_add_link(m: types.Message, state: FSMContext):
 @dp_s.message(ShopStates.price)
 async def shop_add_price(m: types.Message, state: FSMContext):
     data = await state.get_data()
-    db_query("INSERT INTO shop_groups (link, price, admin) VALUES (?, ?, ?)", 
-             (data['link'], m.text, f"@{m.from_user.username or 'admin'}"))
-    await m.answer("✅ Guruh muvaffaqiyatli qo'shildi!"); await state.clear()
+    db_query("INSERT INTO shop_groups (link, price, admin) VALUES (?, ?, ?)", (data['link'], m.text, f"@{m.from_user.username or 'admin'}"))
+    await m.answer("✅ Guruh qo'shildi!"); await state.clear()
 
-# --- 2-BOT (TEST & WORDS) HANDLERLARI ---
+# --- 2-BOT (TEST & WORDS) ---
 @dp_t.message(Command("start"))
 async def test_start(m: types.Message):
     db_query("INSERT OR IGNORE INTO test_users (user_id, name) VALUES (?, ?)", (m.from_user.id, m.from_user.full_name))
@@ -101,98 +92,63 @@ async def test_start(m: types.Message):
         kb.append([KeyboardButton(text="🗑 Test o'chirish"), KeyboardButton(text="👥 Foydalanuvchilar")])
     await m.answer("Bilim botiga xush kelibsiz!", reply_markup=ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True))
 
-# SO'Z OMBORI (YANGI MANTIQ)
-@dp_t.message(F.text == "So'z ombori 📚")
-async def w_menu(m: types.Message, state: FSMContext):
-    kb = [[KeyboardButton(text="📊 So'zlar soni"), KeyboardButton(text="🗑 So'z o'chirish")], [KeyboardButton(text="🔙 Orqaga")]]
-    await m.answer("So'zlarni shunchaki yuboring (bitta-bitta yoki qatorma-qator).\nBot ularni avtomatik saqlaydi.", 
-                   reply_markup=ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True))
-    await state.set_state(WordStates.waiting if 'WordStates' in globals() else AdminStates.bc) # Fallback
+@dp_t.message(F.text == "Testlar 📝")
+async def send_test(m: types.Message):
+    tests = db_query("SELECT * FROM tests WHERE id NOT IN (SELECT test_id FROM solved WHERE user_id=?)", (m.from_user.id,), fetch=True)
+    if not tests: return await m.answer("🎉 Hamma testlarni yechib bo'ldingiz!")
+    t = random.choice(tests)
+    opts = [t[2], t[3], t[4]]; correct = t[4]; random.shuffle(opts)
+    await bot_t.send_poll(m.chat.id, t[1], opts, type='quiz', correct_option_id=opts.index(correct), is_anonymous=False)
+    db_query("INSERT OR IGNORE INTO solved (user_id, test_id) VALUES (?, ?)", (m.from_user.id, t[0]))
 
-@dp_t.message(F.text == "📊 So'zlar soni")
-async def w_count(m: types.Message):
-    res = db_query("SELECT COUNT(*) FROM words WHERE user_id=?", (m.from_user.id,), fetch=True)
-    ikb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="📖 So'zlarni ko'rish", callback_data="show_words")]])
-    await m.answer(f"📊 Sizda jami {res[0][0]} ta so'z bor.", reply_markup=ikb)
+@dp_t.message(F.text == "So'z ombori 📚")
+async def word_menu(m: types.Message):
+    kb = [[KeyboardButton(text="📊 So'zlar soni"), KeyboardButton(text="🗑 So'z o'chirish")], [KeyboardButton(text="🔙 Orqaga")]]
+    await m.answer("So'zlarni shunchaki yuboring, bot saqlaydi.", reply_markup=ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True))
 
 @dp_t.callback_query(F.data == "show_words")
-async def w_show(c: types.CallbackQuery):
+async def show_words_cb(c: types.CallbackQuery):
     rows = db_query("SELECT word FROM words WHERE user_id=?", (c.from_user.id,), fetch=True)
-    if not rows: return await c.answer("Lug'at bo'sh!")
-    msg = "\n".join([f"{i+1}. {r[0]}" for i, r in enumerate(rows)])
-    await c.message.answer(f"📖 **Sizning so'zlaringiz:**\n\n{msg}", parse_mode="Markdown")
+    if not rows: return await c.answer("Lug'at bo'sh!", show_alert=True)
+    msg = "📖 **Sizning so'zlaringiz:**\n\n" + "\n".join([f"{i+1}. {r[0]}" for i, r in enumerate(rows)])
+    await c.message.answer(msg, parse_mode="Markdown"); await c.answer()
 
-@dp_t.message(F.text == "🗑 So'z o'chirish")
-async def w_del_start(m: types.Message, state: FSMContext):
-    await m.answer("O'chirmoqchi bo'lgan so'zingizni yozing:"); await state.set_state(AdminStates.del_w)
+@dp_t.message(F.text == "➕ Test qo'shish", F.from_user.id.in_(ADMINS))
+async def add_test_start(m: types.Message, state: FSMContext):
+    await m.answer("Savolni yuboring:"); await state.set_state(AdminStates.q)
 
-@dp_t.message(AdminStates.del_w) # Bu yerda test_bot dispatcher ishlatiladi
-async def w_del_done(m: types.Message, state: FSMContext):
-    db_query("DELETE FROM words WHERE user_id=? AND word=?", (m.from_user.id, m.text.strip()))
-    await m.answer("✅ Agar so'z mavjud bo'lsa, o'chirildi."); await state.clear()
+@dp_t.message(AdminStates.q)
+async def add_test_q(m: types.Message, state: FSMContext):
+    await state.update_data(q=m.text); await m.answer("1-xato variant:"); await state.set_state(AdminStates.v1)
 
-# RASSILKA (TEST BOT)
-@dp_t.message(F.text == "📢 Rassilka", F.from_user.id.in_(ADMINS))
-async def bc_t_type(m: types.Message):
-    ikb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📝 Oddiy xabar", callback_data="bc_msg"),
-         InlineKeyboardButton(text="📊 Test yuborish", callback_data="bc_test")]
-    ])
-    await m.answer("Rassilka turi:", reply_markup=ikb)
+@dp_t.message(AdminStates.v1)
+async def add_test_v1(m: types.Message, state: FSMContext):
+    await state.update_data(v1=m.text); await m.answer("2-xato variant:"); await state.set_state(AdminStates.v2)
 
-@dp_t.callback_query(F.data == "bc_msg")
-async def bc_t_msg(c: types.CallbackQuery, state: FSMContext):
-    await c.message.answer("Xabarni yuboring:"); await state.set_state(AdminStates.bc); await c.answer()
+@dp_t.message(AdminStates.v2)
+async def add_test_v2(m: types.Message, state: FSMContext):
+    await state.update_data(v2=m.text); await m.answer("3-TO'G'RI variant:"); await state.set_state(AdminStates.v3)
 
-@dp_t.message(AdminStates.bc)
-async def bc_t_send(m: types.Message, state: FSMContext):
-    users = db_query("SELECT user_id FROM test_users", fetch=True)
-    count = 0
-    for u in users:
-        try: await m.copy_to(u[0]); count += 1
-        except: continue
-    await m.answer(f"✅ {count} kishiga yuborildi."); await state.clear()
+@dp_t.message(AdminStates.v3)
+async def add_test_v3(m: types.Message, state: FSMContext):
+    d = await state.get_data()
+    db_query("INSERT INTO tests (q, v1, v2, v3) VALUES (?, ?, ?, ?)", (d['q'], d['v1'], d['v2'], m.text))
+    await m.answer("✅ Test qo'shildi!"); await state.clear()
 
-# ADMIN: FOYDHALANUVCHILARNI KO'RISH
-@dp_t.message(F.text == "👥 Foydalanuvchilar", F.from_user.id.in_(ADMINS))
-async def show_u(m: types.Message):
-    u_test = db_query("SELECT COUNT(*) FROM test_users", fetch=True)[0][0]
-    u_shop = db_query("SELECT COUNT(*) FROM shop_users", fetch=True)[0][0]
-    await m.answer(f"👥 **Foydalanuvchilar:**\n\nTest Bot: {u_test} ta\nShop Bot: {u_shop} ta", parse_mode="Markdown")
-
-# ADMIN: TEST O'CHIRISH
-@dp_t.message(F.text == "🗑 Test o'chirish", F.from_user.id.in_(ADMINS))
-async def del_t_start(m: types.Message, state: FSMContext):
-    tests = db_query("SELECT id, q FROM tests", fetch=True)
-    res = "\n".join([f"{t[0]}. {t[1]}" for t in tests])
-    await m.answer(f"O'chirish uchun ID raqamini yozing:\n\n{res}"); await state.set_state(AdminStates.del_t)
-
-@dp_t.message(AdminStates.del_t)
-async def del_t_done(m: types.Message, state: FSMContext):
-    db_query("DELETE FROM tests WHERE id=?", (m.text,))
-    await m.answer("✅ Test o'chirildi."); await state.clear()
-
-# AVTOMATIK SO'Z QO'SHISH (Handlerlarga tushmagan hamma tekst so'z deb olinadi)
 @dp_t.message(F.text, ~F.text.startswith("/"))
-async def auto_word_save(m: types.Message):
-    if m.text in ["Testlar 📝", "So'z ombori 📚", "📊 So'zlar soni", "🗑 So'z o'chirish", "🔙 Orqaga"]: return
-    added = 0
+async def auto_save(m: types.Message, state: FSMContext):
+    btns = ["Testlar 📝", "So'z ombori 📚", "📊 So'zlar soni", "🗑 So'z o'chirish", "🔙 Orqaga", "📢 Rassilka", "➕ Test qo'shish"]
+    if m.text in btns or await state.get_state(): return
     for w in m.text.split("\n"):
-        word = w.strip()
-        if word:
-            try:
-                db_query("INSERT OR IGNORE INTO words (user_id, word) VALUES (?, ?)", (m.from_user.id, word))
-                added += 1
-            except: pass
-    if added > 0: await m.answer(f"✅ {added} ta so'z lug'atga qo'shildi.")
+        if w.strip(): db_query("INSERT OR IGNORE INTO words (user_id, word) VALUES (?, ?)", (m.from_user.id, w.strip()))
+    await m.answer("✅ Saqlandi.")
 
-# --- ISHGA TUSHIRISH ---
+# --- MAIN ---
 async def main():
     init_db()
-    scheduler = AsyncIOScheduler(timezone='Asia/Dushanbe')
-    scheduler.add_job(morning_alarm, 'cron', hour=5, minute=0)
-    scheduler.start()
-    print("Botlar va Budilnik ishga tushdi!")
+    sch = AsyncIOScheduler(timezone='Asia/Dushanbe')
+    sch.add_job(morning_alarm, 'cron', hour=5, minute=0)
+    sch.start()
     await asyncio.gather(dp_s.start_polling(bot_s), dp_t.start_polling(bot_t))
 
 if __name__ == '__main__':
