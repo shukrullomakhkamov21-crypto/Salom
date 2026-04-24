@@ -111,7 +111,7 @@ async def w_show(c: types.CallbackQuery):
 async def w_del_start(m: types.Message, state: FSMContext):
     await m.answer("O'chirmoqchi bo'lgan so'zingizni yozing:"); await state.set_state(AdminStates.del_w)
 
-@dp_test.message(AdminStates.del_w) # Bu yerda test_bot dispatcher ishlatiladi
+@dp_t.message(AdminStates.del_w) # Bu yerda test_bot dispatcher ishlatiladi
 async def w_del_done(m: types.Message, state: FSMContext):
     db_query("DELETE FROM words WHERE user_id=? AND word=?", (m.from_user.id, m.text.strip()))
     await m.answer("✅ Agar so'z mavjud bo'lsa, o'chirildi."); await state.clear()
