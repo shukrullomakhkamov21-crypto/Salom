@@ -18,7 +18,7 @@ class IsAdmin(BaseFilter):
     async def __call__(self, m: types.Message) -> bool:
         return m.from_user.id in ADMIN_LIST
 
-# --- DATABASE SINFI (XATOLARSIZ) ---
+# --- DATABASE SINFI ---
 class Database:
     def __init__(self, db_path): self.db_path = db_path
     async def execute(self, sql, params=(), fetch=False):
@@ -28,7 +28,7 @@ class Database:
             if fetch: return await cursor.fetchall()
             await db.commit()
 
-db = Database('bot_system_final.db')
+db = Database('bot_system_v15.db')
 
 async def init_db():
     async with aiosqlite.connect(db.db_path) as _db:
@@ -79,7 +79,7 @@ async def show_shop_groups(m: types.Message):
 
 @dp_s.message(F.text == "📢 Rassilka", IsAdmin())
 async def s_bc_start(m: types.Message, state: FSMContext):
-    await m.answer("Xabarni yuboring (Shop Bot):"); await state.set_state(ShopStates.bc)
+    await m.answer("Xabarni yuboring:"); await state.set_state(ShopStates.bc)
 
 @dp_s.message(ShopStates.bc)
 async def s_bc_send(m: types.Message, state: FSMContext):
@@ -88,7 +88,7 @@ async def s_bc_send(m: types.Message, state: FSMContext):
     for u in users:
         try: await m.copy_to(u['user_id']); count += 1; await asyncio.sleep(0.05)
         except: continue
-    await m.answer(f"✅ {count} ta userga yetdi."); await state.clear()
+    await m.answer(f"✅ {count} ta foydalanuvchiga yuborildi."); await state.clear()
 
 @dp_s.message(F.text == "➕ Guruh qo'shish", IsAdmin())
 async def shop_add_start(m: types.Message, state: FSMContext):
@@ -120,15 +120,14 @@ async def take_test(m: types.Message):
     await db.execute("INSERT OR IGNORE INTO solved (user_id, test_id) VALUES (?, ?)", (m.from_user.id, t['id']))
     opts = [t['v1'], t['v2'], t['v3']]; correct = t['v3']; random.shuffle(opts)
     await m.answer_poll(question=t['q'], options=opts, type='quiz', correct_option_id=opts.index(correct), is_anonymous=False)
-    # Zamonat tekshiruvi
     rem = await db.execute("SELECT id FROM tests WHERE id NOT IN (SELECT test_id FROM solved WHERE user_id=?)", (m.from_user.id,), fetch=True)
     if not rem:
-        await asyncio.sleep(1.5); await m.answer("🎊 Tabriklayman! Hamma testlarni yechib bo'ldingiz! ✅")
+        await asyncio.sleep(1.5); await m.answer("🎊 Tabriklayman! Barcha testlarni yechib bo'ldingiz! ✅")
 
 @dp_t.message(F.text == "So'zlar ombori 📚")
 async def word_storage_main(m: types.Message, state: FSMContext):
     await state.set_state(WordStates.main)
-    await m.answer("📚 So'zlar ombori bo'limi!", reply_markup=word_menu_kb)
+    await m.answer("📚 So'zlar ombori!", reply_markup=word_menu_kb)
 
 @dp_t.message(WordStates.main, F.text == "Umumiy so'zlar soni")
 async def word_count(m: types.Message):
@@ -141,12 +140,18 @@ async def view_words(c: types.CallbackQuery):
     off = int(c.data.split("_")[1])
     words = await db.execute("SELECT word FROM words WHERE user_id=? LIMIT 20 OFFSET ?", (c.from_user.id, off), fetch=True)
     if not words: return await c.answer("Boshqa yo'q")
-    txt = "📖 Lug'at:\n\n"
+    txt = "📖 Lug'atingiz:\n\n"
     for i, w in enumerate(words, off+1): txt += f"{i}. {w['word']}\n"
     btn = []
     if off >= 20: btn.append(InlineKeyboardButton(text="⬅️", callback_data=f"view_{off-20}"))
     if len(words) == 20: btn.append(InlineKeyboardButton(text="➡️", callback_data=f"view_{off+20}"))
     await c.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(inline_keyboard=[btn]) if btn else None)
+
+# --- MUHIM: ORQAGA TUGMASI (AVVAL TEKSHIRILADI) ---
+@dp_t.message(F.text == "🔙 Orqaga")
+async def back_universal(m: types.Message, state: FSMContext):
+    await state.clear()
+    await m.answer("Asosiy menyu", reply_markup=main_kb_t(m.from_user.id))
 
 @dp_t.message(WordStates.main, F.text == "Kerakli so'zni o'chirish")
 async def del_word_p(m: types.Message, state: FSMContext):
@@ -154,10 +159,14 @@ async def del_word_p(m: types.Message, state: FSMContext):
 
 @dp_t.message(WordStates.deleting)
 async def process_del_w(m: types.Message, state: FSMContext):
-    if m.text == "🔙 Orqaga": await state.set_state(WordStates.main); return
+    if m.text == "🔙 Orqaga":
+        await state.set_state(WordStates.main)
+        await m.answer("So'zlar ombori", reply_markup=word_menu_kb)
+        return
     await db.execute("DELETE FROM words WHERE user_id=? AND word=?", (m.from_user.id, m.text))
     await m.answer("🗑 O'chirildi."); await state.set_state(WordStates.main)
 
+# --- ADMIN FUNKSIYALARI ---
 @dp_t.message(F.text == "📢 Rassilka", IsAdmin())
 async def t_bc_choice(m: types.Message, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -168,7 +177,7 @@ async def t_bc_choice(m: types.Message, state: FSMContext):
 @dp_t.callback_query(AdminStates.choosing_type, F.data.startswith("bt_"))
 async def t_bc_st(c: types.CallbackQuery, state: FSMContext):
     if c.data == "bt_msg": await c.message.answer("Xabar?"); await state.set_state(AdminStates.bc_message)
-    else: await c.message.answer("Test?"); await state.set_state(AdminStates.bc_test)
+    else: await c.message.answer("Test (Poll)?"); await state.set_state(AdminStates.bc_test)
     await c.answer()
 
 @dp_t.message(AdminStates.bc_message)
@@ -187,7 +196,7 @@ async def t_bc_p_send(m: types.Message, state: FSMContext):
     for u in users:
         try: await m.forward(u['user_id']); c += 1; await asyncio.sleep(0.05)
         except: continue
-    await m.answer(f"✅ {c} ta userga yetdi."); await state.clear()
+    await m.answer(f"✅ {c} ta userga tarqatildi."); await state.clear()
 
 @dp_t.message(F.text == "➕ Test qo'shish", IsAdmin())
 async def add_t_s(m: types.Message, state: FSMContext):
@@ -211,15 +220,31 @@ async def add_t_f(m: types.Message, state: FSMContext):
     await db.execute("INSERT INTO tests (q, v1, v2, v3) VALUES (?, ?, ?, ?)", (d['q'], d['v1'], d['v2'], m.text))
     await m.answer("✅ Qo'shildi!"); await state.clear()
 
+@dp_t.message(F.text == "🗑 Test o'chirish", IsAdmin())
+async def del_t_st(m: types.Message, state: FSMContext):
+    tests = await db.execute("SELECT id, q FROM tests ORDER BY id DESC LIMIT 10", fetch=True)
+    if not tests: return await m.answer("Testlar yo'q.")
+    t_list = "O'chirish uchun ID yuboring:\n\n"
+    for t in tests: t_list += f"🆔 {t['id']}: {t['q'][:30]}...\n"
+    await m.answer(t_list); await state.set_state(AdminStates.del_t)
+
+@dp_t.message(AdminStates.del_t)
+async def process_del_t(m: types.Message, state: FSMContext):
+    if m.text.isdigit():
+        await db.execute("DELETE FROM tests WHERE id=?", (int(m.text),))
+        await m.answer("🗑 O'chirildi."); await state.clear()
+    else: await m.answer("ID raqam yuboring!")
+
 @dp_t.message(F.text == "📊 Statistika", IsAdmin())
 async def stats(m: types.Message):
     u = await db.execute("SELECT COUNT(*) as c FROM test_users", fetch=True)
     t = await db.execute("SELECT COUNT(*) as c FROM tests", fetch=True)
     await m.answer(f"Userlar: {u[0]['c']}\nTestlar: {t[0]['c']}")
 
+# --- SO'ZLARNI AVTO-SAQLASH ---
 @dp_t.message(WordStates.main, F.text)
 async def auto_save(m: types.Message):
-    if m.text in ["Umumiy so'zlar soni", "Kerakli so'zni o'chirish", "🔙 Orqaga"]: return
+    if m.text in ["Umumiy so'zlar soni", "Kerakli so'zni o'chirish"]: return
     a, d = 0, 0
     for w in m.text.split("\n"):
         c_w = w.strip()
@@ -231,13 +256,9 @@ async def auto_save(m: types.Message):
     try: await res.delete(); await m.delete()
     except: pass
 
-@dp_t.message(F.text == "🔙 Orqaga")
-async def back(m: types.Message, state: FSMContext):
-    await state.clear(); await m.answer("Asosiy menyu", reply_markup=main_kb_t(m.from_user.id))
-
 async def main():
     await init_db()
-    print("SISTEMA 100/100 ISHLAYAPTI!")
+    print("SISTEMA 100% TAYYOR!")
     await asyncio.gather(dp_s.start_polling(bot_s), dp_t.start_polling(bot_t))
 
 if __name__ == '__main__':
