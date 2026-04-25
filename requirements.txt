@@ -2,3 +2,5 @@ aiogram>=3.0.0
 aiosqlite
 apscheduler
 requests
+asyncio==3.4.3
+
