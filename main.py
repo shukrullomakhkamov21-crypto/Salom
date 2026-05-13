@@ -6,7 +6,7 @@ from aiogram import Bot, Dispatcher, types, executor
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-# --- SOZLAMALAR ---
+# --- SOZLAMALAR h---
 API_TOKEN = '8070963688:AAHdfx56F0syWuE5txVIVOPUWZHpi7DPwrQ'
 SUPER_ADMIN_ID = 8213426436  # O'zingizning ID raqamingiz
 logging.basicConfig(level=logging.INFO)
