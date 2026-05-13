@@ -7,8 +7,8 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # --- SOZLAMALAR ---
-API_TOKEN = 'BOT_TOKEN_SHU_YERGA'
-SUPER_ADMIN_ID = 123456789  # O'zingizning ID raqamingiz
+API_TOKEN = '8070963688:AAHdfx56F0syWuE5txVIVOPUWZHpi7DPwrQ'
+SUPER_ADMIN_ID = 8213426436  # O'zingizning ID raqamingiz
 logging.basicConfig(level=logging.INFO)
 
 bot = Bot(token=API_TOKEN)
